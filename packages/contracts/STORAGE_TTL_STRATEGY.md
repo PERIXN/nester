@@ -4,7 +4,7 @@
 
 In Soroban (Stellar Smart Contracts), state storage requires rent to remain accessible. If a storage entry's Time-To-Live (TTL) reaches zero without being extended, the entry is archived or deleted, causing user positions to become inaccessible.
 
-This document establishes the storage architecture, storage type classifications, and automatic TTL extension mechanisms implemented across Nester's smart contracts (`VaultContract`, `VaultTokenContract`, `YieldRegistryContract`, `TreasuryContract`, and `AllocationStrategyContract`).
+This document establishes the storage architecture, storage type classifications, and automatic TTL extension mechanisms implemented across Nester's smart contracts (`VaultContract`, `VaultTokenContract`, `YieldRegistryContract`, `TreasuryContract`, `AllocationStrategyContract`, and `ReferralContract`).
 
 ---
 
@@ -21,6 +21,11 @@ This document establishes the storage architecture, storage type classifications
 | **`DataKey::UserShares(Address)`** | `Persistent` | User's minted LP shares inside `VaultTokenContract`. | Extended on mint, burn, transfer, and balance query. |
 | **`DataKey::Tenure(Address)`** | `Persistent` | User's deposit timestamp for tenure-tiered fee discounts. | Extended on deposits and fee previews. |
 | **`DataKey::EmergencyRequest(Address)`** | `Persistent` | Queued emergency exit tickets. | Extended on queue processing and status queries. |
+| **`Referral DataKey::Referrer(Address)`** | `Persistent` | User's bound referrer address; bounds instance ledger entry size. | Extended on referral registration, accrual, and lookup. |
+| **`Referral DataKey::CountedTowardCap(Address)`** | `Persistent` | User's cap evaluation flag; keeps per-user state off instance storage. | Extended on reward accrual. |
+| **`Referral DataKey::ReferredCount(Address)`** | `Persistent` | Referrer's count of rewarded referees. | Extended on reward accrual and lookup. |
+| **`Referral DataKey::RewardBalance(Address)`** | `Persistent` | Referrer's accrued claimable reward balance. | Extended on accrual, claim, and balance query. |
+| **`Referral DataKey::LifetimeReward(Address)`** | `Persistent` | Referrer's cumulative lifetime accrued rewards. | Extended on accrual and lifetime query. |
 | **`Temporary Data`** | `Temporary` | Transient reentrancy mutex guards and one-block calculation caches. | Automatically reclaimed at end of lifetime. |
 
 ---
