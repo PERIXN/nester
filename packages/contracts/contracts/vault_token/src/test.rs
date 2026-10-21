@@ -603,7 +603,10 @@ fn set_total_assets_unauthorized_caller_rejected() {
 
     env.mock_auths(&[]);
     let result = client.try_set_total_assets(&500_i128);
-    assert!(result.is_err(), "non-vault caller must not update total_assets");
+    assert!(
+        result.is_err(),
+        "non-vault caller must not update total_assets"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -657,8 +660,16 @@ fn transfer_to_self_is_a_no_op() {
     let before_supply = client.total_supply();
     client.transfer(&user, &user, &500_i128);
 
-    assert_eq!(client.balance(&user), 1_000_i128, "self-transfer must preserve balance");
-    assert_eq!(client.total_supply(), before_supply, "self-transfer must not change supply");
+    assert_eq!(
+        client.balance(&user),
+        1_000_i128,
+        "self-transfer must preserve balance"
+    );
+    assert_eq!(
+        client.total_supply(),
+        before_supply,
+        "self-transfer must not change supply"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -692,7 +703,11 @@ fn transfer_from_decrements_allowance() {
     client.approve(&owner, &spender, &800_i128, &(current_ledger + 1_000));
 
     client.transfer_from(&spender, &owner, &to, &300_i128);
-    assert_eq!(client.allowance(&owner, &spender), 500_i128, "allowance decremented");
+    assert_eq!(
+        client.allowance(&owner, &spender),
+        500_i128,
+        "allowance decremented"
+    );
     assert_eq!(client.balance(&to), 300_i128);
     assert_eq!(client.balance(&owner), 700_i128);
 }
@@ -714,21 +729,34 @@ fn total_supply_invariant_across_full_sequence() {
     assert_eq!(client.balance(&a), 1_000_i128);
     assert_eq!(client.balance(&b), 0_i128);
     assert_eq!(client.total_supply(), 1_000_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 2. Transfer 400 A → B. Supply unchanged.
     client.transfer(&a, &b, &400_i128);
     assert_eq!(client.balance(&a), 600_i128);
     assert_eq!(client.balance(&b), 400_i128);
-    assert_eq!(client.total_supply(), 1_000_i128, "supply must not change on transfer");
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        1_000_i128,
+        "supply must not change on transfer"
+    );
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 3. Burn 100 from A's own balance. Supply decreases by 100.
     client.burn(&a, &100_i128);
     assert_eq!(client.balance(&a), 500_i128);
     assert_eq!(client.balance(&b), 400_i128);
     assert_eq!(client.total_supply(), 900_i128);
-    assert_eq!(client.total_supply(), client.balance(&a) + client.balance(&b));
+    assert_eq!(
+        client.total_supply(),
+        client.balance(&a) + client.balance(&b)
+    );
 
     // 4. Burn the rest via burn_for_withdrawal. Supply → 0.
     client.burn_for_withdrawal(&a, &500_i128);
@@ -849,4 +877,3 @@ fn cancel_upgrade_by_upgrader_succeeds() {
     client.cancel_upgrade(&upgrader);
     assert!(client.get_pending_upgrade().is_none());
 }
-

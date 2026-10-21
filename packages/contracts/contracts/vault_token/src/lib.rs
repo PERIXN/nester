@@ -22,9 +22,9 @@
 #![no_std]
 
 soroban_sdk::contractmeta!(key = "name", val = "VaultTokenContract");
-soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+soroban_sdk::contractmeta!(key = "version", val = "0.1.0");
 soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
-soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
+soroban_sdk::contractmeta!(key = "commit", val = "5a636a7b");
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, panic_with_error, symbol_short, Address, BytesN, Env,
@@ -487,12 +487,16 @@ impl VaultTokenContract {
         };
         match user {
             None => {
-                env.storage()
-                    .instance()
-                    .extend_ttl(INSTANCE_TTL_THRESHOLD_LEDGERS, INSTANCE_TTL_EXTEND_TO_LEDGERS);
+                env.storage().instance().extend_ttl(
+                    INSTANCE_TTL_THRESHOLD_LEDGERS,
+                    INSTANCE_TTL_EXTEND_TO_LEDGERS,
+                );
             }
             Some(u) => {
-                for key in [DataKey::Balance(u.clone()), DataKey::DepositTimestamp(u.clone())] {
+                for key in [
+                    DataKey::Balance(u.clone()),
+                    DataKey::DepositTimestamp(u.clone()),
+                ] {
                     if env.storage().persistent().has(&key) {
                         env.storage().persistent().extend_ttl(
                             &key,

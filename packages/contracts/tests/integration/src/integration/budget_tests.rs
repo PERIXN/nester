@@ -53,8 +53,13 @@ fn test_deposit_budget() {
     setup_no_fees(&h);
     let user = h.create_user();
     let src = symbol_short!("s1");
-    h.registry()
-        .register_source(&h.admin, &src, &h.create_user(), &None, &ProtocolType::Lending);
+    h.registry().register_source(
+        &h.admin,
+        &src,
+        &h.create_user(),
+        &None,
+        &ProtocolType::Lending,
+    );
     h.vault().set_allocation_strategy(&h.admin, &h.strategy_id);
     h.vault().set_yield_registry(&h.admin, &h.registry_id);
     h.token().mint(&user, &MIN_DEPOSIT_AMOUNT);
