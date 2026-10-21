@@ -245,8 +245,11 @@ type ReconciliationConfig struct {
 // accepting traffic (migrations, dependency reachability checks).
 type StartupConfig struct {
 	enableAutoMigrate bool
-	migrationsDir     string
-	dependencyTimeout time.Duration
+	// allowMainnetAutoMigrate is the explicit operator override that permits
+	// enableAutoMigrate when connected to mainnet.
+	allowMainnetAutoMigrate bool
+	migrationsDir           string
+	dependencyTimeout       time.Duration
 }
 
 type PerformanceConfig struct {
@@ -434,6 +437,12 @@ func Load() (*Config, error) {
 		errors:     make([]string, 0),
 	}
 
+	return loadFrom(&loader)
+}
+
+// loadFrom is the body of Load, split out so Describe can run the exact same
+// reads against a recording loader and derive docs/api-config.md from them.
+func loadFrom(loader *envLoader) (*Config, error) {
 	environment := loader.stringDefault("APP_ENV", "development")
 	if !isOneOf(environment, "development", "staging", "production", "test") {
 		loader.addError("APP_ENV must be one of development, staging, production, test")
@@ -564,9 +573,10 @@ func Load() (*Config, error) {
 			broadcastThresholdBPS: loader.intDefault("APY_BROADCAST_THRESHOLD", 50),
 		},
 		startup: StartupConfig{
-			enableAutoMigrate: loader.boolDefault("RUN_MIGRATIONS", false),
-			migrationsDir:     loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
-			dependencyTimeout: loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
+			enableAutoMigrate:       loader.boolDefault("RUN_MIGRATIONS", false),
+			allowMainnetAutoMigrate: loader.boolDefault("ALLOW_MAINNET_AUTO_MIGRATE", false),
+			migrationsDir:           loader.stringDefault("MIGRATIONS_DIR", "./migrations"),
+			dependencyTimeout:       loader.durationDefault("STARTUP_DEPENDENCY_TIMEOUT", 5*time.Second),
 		},
 		bankAccountCipherKey: loader.stringDefault("BANK_ACCOUNT_ENCRYPTION_KEY", ""),
 		transactionPoller: TransactionPollerConfig{
@@ -704,7 +714,7 @@ func Load() (*Config, error) {
 
 	cfg.accountCipher = loader.accountCipherConfig(cfg.bankAccountCipherKey)
 
-	cfg.validate(&loader)
+	cfg.validate(loader)
 
 	if len(loader.errors) > 0 {
 		return nil, fmt.Errorf("invalid configuration:\n - %s", strings.Join(loader.errors, "\n - "))
@@ -1237,6 +1247,13 @@ func (c *Config) validate(loader *envLoader) {
 
 	if strings.TrimSpace(c.startup.migrationsDir) == "" {
 		loader.addError("MIGRATIONS_DIR must not be empty")
+	}
+
+	if strings.TrimSpace(c.stellar.networkPassphrase) == StellarMainnetPassphrase && c.startup.enableAutoMigrate && !c.startup.allowMainnetAutoMigrate {
+		loader.addError(
+			"RUN_MIGRATIONS=true is refused on mainnet: run migrations as a separate reviewed pipeline step " +
+				"after a backup, or set ALLOW_MAINNET_AUTO_MIGRATE=true to override explicitly",
+		)
 	}
 
 	// Upper bound as well as lower: poolSize is an int parsed from the
@@ -1867,9 +1884,22 @@ func (r RateLimitConfig) QuotaBypassToken() string {
 type envLoader struct {
 	fileValues map[string]string
 	errors     []string
+
+	// describe switches the loader into doc-generation mode: lookups ignore
+	// the process environment and .env (so defaults are what is recorded) and
+	// every typed read appends to vars. See Describe.
+	describe bool
+	vars     []VarSpec
+}
+
+func (l *envLoader) record(name, typ, def string, required bool) {
+	if l.describe {
+		l.vars = append(l.vars, VarSpec{Name: name, Type: typ, Default: def, Required: required})
+	}
 }
 
 func (l *envLoader) requiredString(key string) string {
+	l.record(key, "string", "", true)
 	value, ok := l.lookup(key)
 	if !ok {
 		l.addError(key + " is required")
@@ -1880,6 +1910,7 @@ func (l *envLoader) requiredString(key string) string {
 
 func (l *envLoader) requiredURL(key string) string {
 	value := l.requiredString(key)
+	l.retype(key, "url")
 	if value == "" {
 		return ""
 	}
@@ -1892,6 +1923,7 @@ func (l *envLoader) requiredURL(key string) string {
 }
 
 func (l *envLoader) stringDefault(key, fallback string) string {
+	l.record(key, "string", fallback, false)
 	if value, ok := l.lookup(key); ok {
 		return value
 	}
@@ -1899,6 +1931,7 @@ func (l *envLoader) stringDefault(key, fallback string) string {
 }
 
 func (l *envLoader) uuidDefault(key string, fallback uuid.UUID) uuid.UUID {
+	l.record(key, "uuid", fallback.String(), false)
 	raw, ok := l.lookup(key)
 	if !ok || raw == "" {
 		return fallback
@@ -1912,6 +1945,7 @@ func (l *envLoader) uuidDefault(key string, fallback uuid.UUID) uuid.UUID {
 }
 
 func (l *envLoader) intDefault(key string, fallback int) int {
+	l.record(key, "int", strconv.Itoa(fallback), false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return fallback
@@ -1925,6 +1959,7 @@ func (l *envLoader) intDefault(key string, fallback int) int {
 }
 
 func (l *envLoader) floatDefault(key string, fallback float64) float64 {
+	l.record(key, "float", strconv.FormatFloat(fallback, 'g', -1, 64), false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return fallback
@@ -1941,6 +1976,7 @@ func (l *envLoader) floatDefault(key string, fallback float64) float64 {
 // "not configured" from "configured as zero" — the distinction a *Default
 // helper collapses away.
 func (l *envLoader) floatOverride(key string) *float64 {
+	l.record(key, "float", "", false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return nil
@@ -1954,6 +1990,7 @@ func (l *envLoader) floatOverride(key string) *float64 {
 }
 
 func (l *envLoader) intOverride(key string) *int {
+	l.record(key, "int", "", false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return nil
@@ -1967,6 +2004,7 @@ func (l *envLoader) intOverride(key string) *int {
 }
 
 func (l *envLoader) durationOverride(key string) *time.Duration {
+	l.record(key, "duration", "", false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return nil
@@ -1980,6 +2018,7 @@ func (l *envLoader) durationOverride(key string) *time.Duration {
 }
 
 func (l *envLoader) stringSliceDefault(key string, fallback []string) []string {
+	l.record(key, "list", strings.Join(fallback, ","), false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return fallback
@@ -1995,6 +2034,11 @@ func (l *envLoader) stringSliceDefault(key string, fallback []string) []string {
 }
 
 func (l *envLoader) intSliceDefault(key string, fallback []int) []int {
+	strs := make([]string, len(fallback))
+	for i, v := range fallback {
+		strs[i] = strconv.Itoa(v)
+	}
+	l.record(key, "list", strings.Join(strs, ","), false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return fallback
@@ -2017,6 +2061,7 @@ func (l *envLoader) intSliceDefault(key string, fallback []int) []int {
 }
 
 func (l *envLoader) boolDefault(key string, fallback bool) bool {
+	l.record(key, "bool", strconv.FormatBool(fallback), false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return fallback
@@ -2030,6 +2075,7 @@ func (l *envLoader) boolDefault(key string, fallback bool) bool {
 }
 
 func (l *envLoader) durationDefault(key string, fallback time.Duration) time.Duration {
+	l.record(key, "duration", fallback.String(), false)
 	raw, ok := l.lookup(key)
 	if !ok {
 		return fallback
@@ -2053,6 +2099,7 @@ func (l *envLoader) accountCipherConfig(legacyKey string) AccountCipherConfig {
 	fingerprintKey := l.stringDefault("ACCOUNT_CIPHER_FINGERPRINT_KEY", "")
 	active := l.stringDefault("ACCOUNT_CIPHER_ACTIVE_KEY", "")
 
+	l.record("ACCOUNT_CIPHER_KEYS", "list", "", false)
 	keysRaw, hasKeys := l.lookup("ACCOUNT_CIPHER_KEYS")
 	if hasKeys {
 		keys := make(map[string]string)
@@ -2119,6 +2166,9 @@ func (l *envLoader) accountCipherConfig(legacyKey string) AccountCipherConfig {
 }
 
 func (l *envLoader) lookup(key string) (string, bool) {
+	if l.describe {
+		return "", false
+	}
 	if value, ok := os.LookupEnv(key); ok {
 		trimmed := strings.TrimSpace(value)
 		if trimmed != "" {

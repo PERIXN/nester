@@ -1,4 +1,9 @@
 #![no_std]
+
+soroban_sdk::contractmeta!(key = "name", val = "AdapterSoroswap");
+soroban_sdk::contractmeta!(key = "version", val = env!("CARGO_PKG_VERSION"));
+soroban_sdk::contractmeta!(key = "source_repo", val = "github.com/Suncrest-Labs/nester");
+soroban_sdk::contractmeta!(key = "commit", val = env!("GIT_COMMIT_HASH"));
 //! Soroswap AMM adapter.
 //!
 //! `adapter_pool` invokes `deposit(address, amount)` on the pool. A Soroswap
@@ -99,7 +104,6 @@ fn require_vault(env: &Env, caller: &Address) {
     }
 }
 
-
 fn deadline(env: &Env) -> u64 {
     env.ledger().timestamp() + DEADLINE_WINDOW_SECS
 }
@@ -109,7 +113,13 @@ fn units_held(env: &Env) -> i128 {
 }
 
 /// Swaps `amount_in` of `from_token` into `to_token` through the router.
-fn swap(env: &Env, from_token: &Address, to_token: &Address, amount_in: i128, min_out: i128) -> i128 {
+fn swap(
+    env: &Env,
+    from_token: &Address,
+    to_token: &Address,
+    amount_in: i128,
+    min_out: i128,
+) -> i128 {
     let router: Address = get(env, &DataKey::Router);
     let me = env.current_contract_address();
     let path = soroban_sdk::vec![env, from_token.clone(), to_token.clone()];
@@ -380,7 +390,11 @@ impl YieldAdapter for SoroswapAdapterContract {
 
         let growth = now - checkpoint.value;
         let annualized = growth * SECONDS_PER_YEAR * 10_000 / (checkpoint.value * elapsed as i128);
-        let capped = if annualized > MAX_APY_BPS as i128 { MAX_APY_BPS as i128 } else { annualized };
+        let capped = if annualized > MAX_APY_BPS as i128 {
+            MAX_APY_BPS as i128
+        } else {
+            annualized
+        };
 
         AdapterApy { apy_bps: capped as u32, confidence: ApyConfidence::Derived }
     }
@@ -398,6 +412,13 @@ impl YieldAdapter for SoroswapAdapterContract {
 
     fn max_withdraw(env: Env) -> i128 {
         units_held(&env)
+    }
+}
+
+#[contractimpl]
+impl SoroswapAdapterContract {
+    pub fn version(env: Env) -> soroban_sdk::String {
+        soroban_sdk::String::from_str(&env, env!("CARGO_PKG_VERSION"))
     }
 }
 

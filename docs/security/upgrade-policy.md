@@ -1,42 +1,92 @@
 # Upgrade Policy
 
-This document defines the upgradeability posture, timelock parameters, authorization model, and architectural rationale for all contracts and modules in the Nester protocol.
-
-## Protocol Upgrade Matrix
-
-The following table lists every deployable contract, adapter, and common module across the Nester workspace, detailing its upgradeability classification, minimum delay, and architectural justification:
-
-| Contract / Component | Path | Classification | Minimum Timelock Delay | Role / Mechanism | Architectural Justification |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`vault`** | `contracts/vault` | Upgradeable | 48 hours (172,800s) | `Role::Upgrader` (`nester_common::Upgrade`) | Core custodial contract holding user collateral and managing yield strategies. 48h timelock gives depositors sufficient time to exit if they disagree with code changes. |
-| **`treasury`** | `contracts/treasury` | Upgradeable | 7 days (604,800s) | `Role::Upgrader` (`nester_common::Upgrade`) | Protocol fee receiver and reserve vault. Governs long-term protocol assets; 7-day timelock reflects the higher blast radius of treasury logic alterations. |
-| **`yield_registry`** | `contracts/yield_registry` | Upgradeable | 48 hours (172,800s) | `Role::Upgrader` (`nester_common::Upgrade`) | Registry of yield sources, oracle integrations, and adapter mappings. Upgradeable to onboard new protocol integrations and adjust valuation methods. |
-| **`allocation_strategy`** | `contracts/allocation_strategy` | Upgradeable | 48 hours (172,800s) | `Role::Upgrader` (`nester_common::Upgrade`) | Computes portfolio asset allocations across yield venues. Upgradeable to refine risk weighting algorithms and rebalance criteria. |
-| **`recurring_deposit`** | `contracts/recurring_deposit` | Upgradeable | 48 hours (172,800s) | `Role::Upgrader` (`nester_common::Upgrade`) | Automated recurring deposit executor. Upgradeable to patch automation hooks and scheduler integrations. |
-| **`vault_token`** | `contracts/vault_token` | Upgradeable | 48 hours (172,800s) | `Role::Upgrader` (`nester_common::Upgrade`) | SEP-41 share token representing depositor ownership in vaults. Equipped with `nester_common::Upgrade` to allow bug fixes and ERC-4626/SEP-41 spec evolutions without requiring costly state migrations of all share holders. |
-| **`vault_factory`** | `contracts/vault_factory` | Governed Registry / Immutable Factory | N/A (Factory is Immutable; Child vaults governed via 48h timelock) | Timelocked WASM Hash Pointer | The factory contract itself is deliberately immutable to prevent rug-pull vectors on factory address registries. New vault deployments update the `VaultWasmHash` via timelock proposals (`propose_wasm_hash` / `apply_wasm_hash`), affecting only newly deployed vaults. |
-| **`adapter_blend`** | `contracts/adapter_blend` | Deliberately Immutable | None (Immutable) | Address swap via `yield_registry` | Stateless protocol integration adapter. Holds no user funds or persistent balances. New versions are deployed as distinct contracts and swapped into `yield_registry` without timelocking individual adapter WASM updates. |
-| **`adapter_soroswap`** | `contracts/adapter_soroswap` | Deliberately Immutable | None (Immutable) | Address swap via `yield_registry` | Stateless DEX swap adapter. Holds zero user assets; immutability guarantees deterministic execution. Replaced by updating adapter registrations in registry/vault. |
-| **`adapter_lending`** | `contracts/adapter_lending` | Deliberately Immutable | None (Immutable) | Address swap via `yield_registry` | Stateless lending market adapter. Immutable to prevent unexpected changes to asset routing; superseded via address swap in registry. |
-| **`adapter_pool`** | `contracts/adapter_pool` | Deliberately Immutable | None (Immutable) | Address swap via `yield_registry` | Stateless liquidity pool adapter. Holds no deposits; replaced via configuration updates on the parent vault/registry. |
-| **`savings_goal`** | `contracts/savings_goal` | Deliberately Immutable | None (Immutable) | Non-custodial metadata | Non-custodial personal goal ledger. Does not hold custody of funds (funds reside in vaults). Upgrades or feature additions are introduced via new goal factory registries. |
-| **`goal_rewards`** | `contracts/goal_rewards` | Deliberately Immutable | None (Immutable) | Incentive distributor deprecation | Growth and incentive distribution module with strictly isolated budget limits. If reward rules evolve, old contracts are depleted/sunset and new reward distributors are deployed. |
-| **`referral`** | `contracts/referral` | Deliberately Immutable | None (Immutable) | Referral registry deprecation | Non-custodial referral tracker. Immutable to protect community referral records; upgrades deploy an updated tracker and redirect dapp routing. |
-| **`nester`** | `contracts/nester` | Deliberately Immutable | None (Immutable) | Directory / Entrypoint | Stateless top-level entrypoint and contract directory. Router configuration updates point to new child contract deployments. |
-| **`lp_aggregator`** | `contracts/lp_aggregator` | Deliberately Immutable | None (Immutable) | Pure Math / Simulation | Stateless AMM liquidity simulation and routing calculator. Pure math routines without state or custody. |
-| **`access_control`** | `libs/access_control` | Library crate (`rlib`) | N/A | Embedded directly into host contracts | Not a deployable on-chain contract; compiled statically as a dependency library into contracts enforcing role-based permissions. |
-| **`timelock`** | `libs/timelock` | Library crate (`rlib`) | N/A | Embedded directly into host contracts | Not a deployable on-chain contract; provides reusable storage and verification primitives compiled directly into deployable contracts. |
-| **`rent_escrow`** | `contracts/rent_escrow` | Placeholder | N/A | Unimplemented | Placeholder stub crate (`compile_error!`), not deployable on testnet or mainnet. |
+> **Accuracy note (issue #1488):** This document was rewritten against the actual
+> contract code with file/line citations. The previous version described a uniform
+> timelock-governed upgrade path for all contracts; that is not what the code does.
+> Gaps are noted inline.
 
 ---
 
-## Upgrade Authorization Model
+## Upgrade posture by contract
 
-For all contracts classified as **Upgradeable**:
-- **Role Isolation:** Only an account assigned `Role::Upgrader` may call `propose_upgrade` or `cancel_upgrade`. `Role::Upgrader` is distinct from `Role::Admin` — possessing `Admin` alone is rejected by `nester_common::Upgrade::propose_upgrade`.
-- **Mainnet Governance:** On public testnet and mainnet deployments, `Role::Upgrader` must be held by a multi-sig or timelocked governance safe, never an individual EOA/single key.
-- **Permissionless Execution:** Once the proposed `eta` has elapsed, `execute_upgrade` can be invoked permissionlessly by any caller. The security boundary is enforced strictly by the elapsed timelock delay and the exact WASM hash verification.
-- **Immediate Cancellation:** An active `Role::Upgrader` can call `cancel_upgrade` at any point prior to execution if an issue or vulnerability is detected in the proposed WASM bytecode.
+| Contract | Upgrade mechanism | Timelock? | Evidence |
+| :--- | :--- | :--- | :--- |
+| `vault` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_VAULT`) | `vault/src/lib.rs`, `libs/common/src/upgrade.rs` |
+| `treasury` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 7 days (`MIN_UPGRADE_DELAY_TREASURY`) | `treasury/src/lib.rs` |
+| `yield_registry` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_YIELD_REGISTRY`) | `yield_registry/src/lib.rs` |
+| `allocation_strategy` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_ALLOCATION_STRATEGY`) | `allocation_strategy/src/lib.rs` |
+| `vault_token` | `Upgrade::propose_upgrade` / `execute_upgrade` | Yes — 48 h (`MIN_UPGRADE_DELAY_VAULT_TOKEN`) | `vault_token/src/lib.rs`, `libs/common/src/upgrade.rs` |
+| **`nester`** | **Instant admin `upgrade`** | **No timelock** | `nester/src/lib.rs:172` |
+| **`vault_factory`** | **No upgrade function** | **N/A** | `vault_factory/src/lib.rs` (no `upgrade` entry point) |
+
+Delay constants are defined in
+`libs/common/src/constants.rs:55-64`.
+
+---
+
+## Timelock path (vault, treasury, registry, allocation_strategy, vault_token)
+
+These contracts use the shared `nester_common::Upgrade` module
+(`libs/common/src/upgrade.rs`):
+
+1. `propose_upgrade(proposer, wasm_hash, min_delay, eta)` — requires
+   `Role::Upgrader`; stores a `PendingUpgrade`; rejects `eta < now + min_delay`.
+2. `cancel_upgrade(canceller)` — requires `Role::Upgrader`.
+3. `execute_upgrade(caller, wasm_hash)` — permissionless after `eta`; wasm hash
+   must match the proposal; calls `update_current_contract_wasm`.
+
+Events `PROP_UPG`, `CAN_UPG`, and `EXEC_UPG` are emitted at each step
+(see `EVENTS.md`), making the window publicly observable before an upgrade
+executes.
+
+---
+
+## `nester` — instant admin upgrade (no timelock)
+
+`nester`'s `upgrade` entry point (`nester/src/lib.rs:172`) requires only
+`Role::Admin` and executes the WASM swap immediately — there is no proposal
+step, no delay, and no `Role::Upgrader` distinction:
+
+```rust
+// nester/src/lib.rs:172-185
+pub fn upgrade(env: Env, admin: Address, new_wasm_hash: BytesN<32>) {
+    admin.require_auth();
+    require_initialized(&env);
+    AccessControl::require_role(&env, &admin, Role::Admin);
+    // ... increments version counter, emits event, calls update_current_contract_wasm
+}
+```
+
+Tests confirming Admin-only enforcement are in `nester/src/test.rs:195-215`.
+
+**Gap:** nester does not go through the shared timelock module. This should be
+addressed before mainnet if the deployment intent is to give users a withdrawal
+window. Tracked in a follow-up issue.
+
+---
+
+## `vault_factory` — no upgrade function
+
+`vault_factory/src/lib.rs` has no `upgrade` entry point and no `Upgrade` usage.
+The contract is currently not upgradeable. This may be intentional (factory
+logic is minimal) but should be documented as a deliberate decision or the
+missing path should be added. Tracked as a follow-up.
+
+---
+
+## Storage safety on upgrade
+
+`update_current_contract_wasm` swaps WASM in-place and never touches contract
+storage. Existing deposits, vault token balances, and accrued fees are unaffected
+by the upgrade itself. New versions are responsible for their own storage
+migrations if the schema changes (`get_schema_version` / `init_schema_version`
+in `libs/common/src/upgrade.rs`).
+
+---
+
+## Immutability & Adapter Upgrades
+
+Stateless adapters (`adapter_blend`, `adapter_soroswap`, `adapter_lending`, `adapter_pool`), trackers (`referral`, `savings_goal`), and math modules (`lp_aggregator`) are intentionally immutable. They hold no user funds or persistent balances. New versions are deployed as distinct contracts and swapped into `yield_registry` or configured via the parent contracts without timelocking individual adapter WASM updates.
 
 ---
 
@@ -76,7 +126,6 @@ Every upgradeable contract includes unit and integration tests enforcing this up
 - `execute_upgrade_before_eta_is_rejected_even_for_upgrader`
 - `cancel_upgrade_by_upgrader_succeeds`
 
-Refer to:
-- [`vault/src/test.rs`](../../packages/contracts/contracts/vault/src/test.rs)
-- [`vault_token/src/test.rs`](../../packages/contracts/contracts/vault_token/src/test.rs)
-- [`treasury/src/test.rs`](../../packages/contracts/contracts/treasury/src/test.rs)
+Timelock behaviour is asserted in `vault/src/test.rs`, `vault_token/src/test.rs`, and `treasury/src/test.rs`: `Role::Admin` alone
+cannot propose an upgrade, a delay below the minimum is rejected, and execution
+before the proposal's ETA is rejected regardless of caller.
